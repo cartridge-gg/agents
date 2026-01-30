@@ -116,6 +116,8 @@ END {
 '
 )"
 
+index="[Agent Skills Index]|root: ./agents|IMPORTANT: Prefer retrieval-led reasoning over pre-training for any tasks covered by skills.|${index}"
+
 tmp="$(mktemp)"
 awk -v start="$START_MARKER" -v end="$END_MARKER" -v repl="$index" '
 {
