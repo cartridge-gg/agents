@@ -1,5 +1,5 @@
 ---
-name: Create PR
+name: create-pr
 description: Create or update a PR from current branch to main, watch CI, and address feedback
 ---
 The user likes the state of the code.
