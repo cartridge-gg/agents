@@ -16,9 +16,26 @@ if [[ ! -f "$AGENTS_FILE" ]]; then
   exit 1
 fi
 
-if ! grep -qF "$START_MARKER" "$AGENTS_FILE" || ! grep -qF "$END_MARKER" "$AGENTS_FILE"; then
-  echo "Markers not found in $AGENTS_FILE." >&2
-  echo "Add the following lines:" >&2
+has_start=0
+has_end=0
+if grep -qF "$START_MARKER" "$AGENTS_FILE"; then
+  has_start=1
+fi
+if grep -qF "$END_MARKER" "$AGENTS_FILE"; then
+  has_end=1
+fi
+
+if [[ "$has_start" -eq 0 && "$has_end" -eq 0 ]]; then
+  tmp="$(mktemp)"
+  {
+    printf "%s\n" "$START_MARKER"
+    printf "%s\n" "$END_MARKER"
+    cat "$AGENTS_FILE"
+  } > "$tmp"
+  mv "$tmp" "$AGENTS_FILE"
+elif [[ "$has_start" -eq 0 || "$has_end" -eq 0 ]]; then
+  echo "Markers not found as a pair in $AGENTS_FILE." >&2
+  echo "Add the following lines as a pair:" >&2
   echo "$START_MARKER" >&2
   echo "$END_MARKER" >&2
   exit 1
