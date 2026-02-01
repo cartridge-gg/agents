@@ -38,5 +38,5 @@
 
 - The generated hierarchy for `.agents/skills` lives between the markers below and is refreshed by `generate_index.sh`.
 <!-- SKILLS_INDEX_START -->
-skills|create-pr:{create-pr.md}
+skills|create-a-plan:{create-a-plan.md},create-pr:{create-pr.md}
 <!-- SKILLS_INDEX_END -->
