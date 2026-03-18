@@ -108,6 +108,18 @@ When using `github_token` with `pull_request_target` (the common fork PR pattern
     env:
       TOKEN: ${{ secrets.TOKEN }}
   ```
+- **Never interpolate attacker-controlled context in `run:` blocks either.**
+  Properties like `github.event.pull_request.title`, `github.event.issue.body`, `github.event.comment.body`, and `github.event.head_commit.message` can contain shell metacharacters that enable arbitrary command injection.
+  Use `env:` — the same pattern as secrets:
+  ```yaml
+  # WRONG — attacker can inject shell commands via PR title
+  - run: echo "${{ github.event.pull_request.title }}"
+
+  # RIGHT
+  - run: echo "$TITLE"
+    env:
+      TITLE: ${{ github.event.pull_request.title }}
+  ```
 
 #### Prompt Context
 - In automation mode (when `prompt` is set), Claude does NOT automatically receive PR/issue context.
@@ -162,6 +174,8 @@ Key structural rules:
 - Use `fetch-depth: 1` unless full history is needed
 - For PR workflows that push commits, checkout the head ref: `ref: ${{ github.event.pull_request.head.ref }}`
 - For `pull_request_target`, the checkout gets the base branch by default — explicitly checkout the PR head if you need the fork's code (with caution about untrusted code)
+- **Treat `workflow_run` artifacts as untrusted.** When splitting into an unprivileged `pull_request` workflow and a privileged `workflow_run` workflow, a malicious PR can poison artifacts uploaded during the first stage.
+  In the privileged `workflow_run` job: validate artifact contents, unzip to `/tmp` (not the workspace), and never execute artifact contents as code.
 
 ### Phase 5: Review
 
