@@ -26,7 +26,7 @@ Determine what the user wants:
 - **What triggers it?** PR opened, comment with @claude, schedule, manual dispatch, issue created, etc.
 - **What should Claude do?** Review code, write docs, triage issues, fix code, label things, etc.
 - **Does Claude need to write back?** Push commits, post comments, create issues, add labels?
-- **Are fork PRs involved?** This affects event type and secret access.
+- **Are fork PRs involved?** If yes, use `pull_request_target` instead of `pull_request` so the workflow has access to repo secrets.
 
 For simple requests, proceed directly to generation.
 For complex workflows, ask 1-2 clarifying questions first.
@@ -54,6 +54,60 @@ Verify each of these internally before writing any YAML.
   - OIDC auth or GitHub App token exchange → `id-token: write`
 - Set permissions at the **job level** for least-privilege.
 - When unsure, start restrictive — a missing permission produces a clear error, an overly broad one is a silent security risk.
+
+#### GitHub Token: Two Paths
+
+The action needs two credentials: an **Anthropic API key** (to call Claude) and a **GitHub token** (to comment on PRs, read code, etc.).
+The GitHub token has two paths — understanding which one applies is critical:
+
+1. **Default path (OIDC + Anthropic GitHub App):** The action requests an OIDC token from GitHub, then exchanges it with Anthropic's service for a GitHub App installation token.
+   This requires the repo to have **Anthropic's GitHub App installed**.
+   If the App is not installed, this fails with `Invalid OIDC token`.
+   This path requires `id-token: write` permission.
+
+2. **Override path (`github_token` input):** If you pass `github_token`, the action skips OIDC entirely and uses that token directly.
+   The built-in `${{ github.token }}` (aka `${{ secrets.GITHUB_TOKEN }}`) already has the permissions declared in the workflow's `permissions:` block.
+
+**Decision rule:** If the repo has Anthropic's GitHub App installed, use the default path.
+Otherwise, pass `github_token: ${{ github.token }}` to bypass OIDC:
+```yaml
+- uses: anthropics/claude-code-action@v1
+  with:
+    anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+    github_token: ${{ github.token }}
+```
+
+**Security tradeoff between the two paths:**
+The GitHub App path adds a validation layer — Anthropic's service verifies the OIDC token and can enforce policies on which repos/workflows are allowed before issuing a scoped token.
+With `github_token`, you skip that gatekeeper.
+
+When using `github_token` with `pull_request_target` (the common fork PR pattern):
+- **Safe:** The workflow file runs from the base branch, so a fork can't modify the workflow to escalate permissions. The token is scoped to only the declared permissions.
+- **Risky:** If the workflow checks out the fork's code, Claude runs in that checkout. A malicious contributor could include a crafted `AGENTS.md` or `CLAUDE.md` that tries to trick Claude into misusing available tools — e.g., exfiltrating the Anthropic API key or posting spam via `gh`.
+
+**Mitigations when using `github_token` + `pull_request_target`:**
+- Restrict tools with `--allowedTools` in `claude_args` to only what the workflow needs
+- Block destructive commands with `--disallowedTools` (e.g., `Bash(gh pr merge:*)`)
+- Keep `--max-turns` low to limit the blast radius
+- Long-term, installing Anthropic's GitHub App is the more secure option
+
+#### Secrets & Fork PRs
+
+- **Fork PRs cannot access repo secrets.** Workflows triggered by `pull_request` from a fork will have empty secret values — including `secrets.ANTHROPIC_API_KEY`.
+  Use `pull_request_target` if you need secrets for fork PRs. This runs the workflow from the base branch with access to the base repo's secrets.
+  **Security tradeoff:** The workflow has access to secrets while potentially processing untrusted code. Never checkout and execute fork code in a `pull_request_target` workflow without careful review.
+- **Secret scope matters.** Secrets can be set at repo, environment, or org level.
+  If a secret is scoped to an environment, the job must declare `environment: <name>` or the secret will be empty with no error.
+- **Never interpolate secrets in `run:` blocks.** Use `env:` to pass them:
+  ```yaml
+  # WRONG — secret can leak in logs or process table
+  - run: curl -H "Authorization: Bearer ${{ secrets.TOKEN }}" ...
+
+  # RIGHT
+  - run: curl -H "Authorization: Bearer $TOKEN" ...
+    env:
+      TOKEN: ${{ secrets.TOKEN }}
+  ```
 
 #### Prompt Context
 - In automation mode (when `prompt` is set), Claude does NOT automatically receive PR/issue context.
@@ -93,6 +147,7 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}  # omit if Anthropic's GitHub App is installed
           prompt: |
             REPO: ${{ github.repository }}
             <additional context>
@@ -129,3 +184,15 @@ When a workflow fails, diagnose systematically:
 4. **Inspect the event payload.** Add a debug step: `run: echo '${{ toJson(github.event) }}'` to see what context is actually available.
 5. **One fix at a time.** Change one thing, push, observe. Do not stack multiple speculative fixes.
 6. **Fetch docs when stuck.** If you cannot diagnose from the error alone, fetch the relevant source file from the claude-code-action repo rather than guessing.
+
+### Common Failure Patterns
+
+| Symptom | Likely Cause | Fix |
+|---|---|---|
+| `Resource not accessible by integration` | Missing permission scope | Add the required permission at job level |
+| `403` on `git push` | Missing `contents: write` | Add `contents: write` to job permissions |
+| Secret value is empty (no error) | Fork PR, wrong scope, or typo in secret name | Check: is this a fork PR? Is the secret scoped to an environment the job doesn't declare? Does the name match exactly? |
+| `Invalid OIDC token` | Anthropic's GitHub App is not installed on the repo | Pass `github_token: ${{ github.token }}` to bypass OIDC exchange |
+| `Error: OIDC token request failed` | Missing `id-token: write` permission | Add `id-token: write` to job permissions (only needed if using default OIDC path) |
+| `Unsupported event type` | Trigger not handled by claude-code-action | Fetch `context.ts` to confirm supported events |
+| Claude posts no comment / takes no action | Missing context in `prompt` | In automation mode, Claude doesn't receive PR/issue context automatically — add `${{ github.event.pull_request.number }}` etc. to the prompt |
